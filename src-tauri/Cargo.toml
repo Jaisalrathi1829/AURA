@@ -1,0 +1,62 @@
+[package]
+name = "aura"
+version = "1.0.0"
+description = "AURA — a persistent AI desktop companion"
+authors = ["AURA"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# The desktop binary is a thin shim over this lib so the app can also be
+# exercised from integration tests without spawning a window.
+name = "aura_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `protocol-asset` lets the video renderer load user-supplied character clips
+# from the app data directory (scoped in tauri.conf.json).
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
+tauri-plugin-notification = "2"
+tauri-plugin-autostart = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tokio = { version = "1", features = ["time", "sync", "rt", "macros"] }
+futures-util = "0.3"
+
+# rustls avoids depending on the system OpenSSL; json+stream give us SSE.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+
+# Windows Credential Manager — the Claude API key never reaches the webview.
+keyring = { version = "3", features = ["windows-native"] }
+
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+parking_lot = "0.12"
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

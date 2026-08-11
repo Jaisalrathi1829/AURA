@@ -1,0 +1,201 @@
+/*
+ * The rig.
+ *
+ * `CharacterAnimation` writes --a-* custom properties onto `.character-stage`
+ * every frame; these rules turn them into transforms. Keeping the mapping in
+ * CSS means the animation loop only ever touches a style object — the layout
+ * and paint work stays on the compositor.
+ */
+
+.character-stage {
+  --a-blink: 0;
+  --a-gaze-x: 0;
+  --a-gaze-y: 0;
+  --a-head-yaw: 0;
+  --a-head-tilt: 0;
+  --a-breath: 0;
+  --a-mouth: 0;
+  --a-smile: 0;
+  --a-brow: 0;
+  --a-sway: 0;
+  --a-glow: 0.5;
+  --a-sleep: 0;
+
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Only the figure itself is clickable; the rest of the stage is desktop. */
+.character-stage .character-render {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.aura-figure {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+}
+
+/* ------------------------------------------------------------------ body */
+
+.aura-figure .rig-body {
+  transform: translate(calc(var(--a-sway) * 2px), calc(var(--a-breath) * -1.1px));
+  will-change: transform;
+}
+
+.aura-figure .rig-chest {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(calc(1 + var(--a-breath) * 0.014))
+    scaleX(calc(1 + var(--a-breath) * 0.006));
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------------ head */
+
+.aura-figure .rig-head {
+  transform-box: fill-box;
+  /* Roughly the base of the neck, so the head pivots instead of sliding. */
+  transform-origin: 50% 96%;
+  transform: rotate(calc(var(--a-head-tilt) * 1.7deg + var(--a-sleep) * 5deg))
+    translate(
+      calc(var(--a-head-yaw) * 3px),
+      calc(var(--a-breath) * -0.7px + var(--a-sleep) * 5px)
+    );
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------------ eyes */
+
+.aura-figure .rig-iris-l,
+.aura-figure .rig-iris-r {
+  transform: translate(calc(var(--a-gaze-x) * 3.4px), calc(var(--a-gaze-y) * 2.2px));
+  will-change: transform;
+}
+
+/* The lid is a skin-toned plate whose lower edge *is* the eyelid; it slides
+   down over the clipped eye, carrying its lash line with it. 18px takes the
+   edge from its resting overlap to just past the lower lash. */
+.aura-figure .rig-lid-l,
+.aura-figure .rig-lid-r {
+  transform: translateY(calc(var(--a-blink) * 14px));
+  will-change: transform;
+}
+
+/* A fractional offset makes the blink read as organic rather than mechanical. */
+.aura-figure .rig-lid-r {
+  transform: translateY(calc(var(--a-blink) * 13.7px));
+}
+
+/* ----------------------------------------------------------------- brows */
+
+.aura-figure .rig-brow-l {
+  transform-box: fill-box;
+  transform-origin: 100% 50%;
+  transform: translateY(calc(var(--a-brow) * -3.4px))
+    rotate(calc(var(--a-brow) * -2deg));
+}
+
+.aura-figure .rig-brow-r {
+  transform-box: fill-box;
+  transform-origin: 0% 50%;
+  transform: translateY(calc(var(--a-brow) * -3.4px))
+    rotate(calc(var(--a-brow) * 2deg));
+}
+
+/* ----------------------------------------------------------------- mouth */
+
+.aura-figure .rig-jaw {
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+  /* Never fully collapses — a hairline of shadow keeps the lips separated. */
+  transform: scaleY(calc(0.05 + var(--a-mouth) * 0.95));
+}
+
+.aura-figure .lip-lower {
+  transform: translateY(calc(var(--a-mouth) * 3.4px));
+}
+
+.aura-figure .rig-mouth-neutral {
+  opacity: calc(1 - var(--a-smile));
+}
+
+.aura-figure .rig-mouth-smile {
+  opacity: var(--a-smile);
+}
+
+/* -------------------------------------------------------------- presence */
+
+.aura-figure .rig-glow {
+  opacity: calc(0.28 + var(--a-glow) * 0.72);
+  transition: opacity 420ms var(--ease);
+}
+
+.aura-figure .rig-core {
+  opacity: calc(0.45 + var(--a-glow) * 0.55);
+}
+
+.aura-figure .rig-core-halo {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transform: scale(calc(0.8 + var(--a-glow) * 0.5));
+  opacity: calc(0.1 + var(--a-glow) * 0.35);
+}
+
+/* Thinking gets a slow pulse on the collar light — a visible "working" tell
+   that costs nothing and needs no extra element. */
+.character-render[data-state="THINKING"] ~ * .rig-core-halo,
+.character-stage[data-state="THINKING"] .rig-core-halo {
+  animation: aura-core-pulse 1.6s var(--ease) infinite;
+}
+
+@keyframes aura-core-pulse {
+  0%,
+  100% {
+    opacity: 0.18;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.35);
+  }
+}
+
+/* --------------------------------------------------------- video variant */
+
+.character-render--video video {
+  display: block;
+  object-fit: contain;
+  background: transparent;
+}
+
+.character-render--missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+  border: 1px dashed var(--glass-line);
+  border-radius: var(--radius);
+  background: var(--glass);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+}
+
+.character-render--missing .hint {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 0;
+}
+
+.character-render--missing code {
+  color: var(--accent);
+  font-size: 11.5px;
+}

@@ -1,0 +1,108 @@
+/* Design tokens and reset shared by the overlay and the settings window. */
+
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system,
+    sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+
+  /* Glass surfaces — translucent, cool, never opaque grey. */
+  --glass: rgba(16, 22, 32, 0.72);
+  --glass-strong: rgba(12, 17, 26, 0.88);
+  --glass-line: rgba(150, 200, 245, 0.16);
+  --glass-line-strong: rgba(160, 210, 255, 0.3);
+
+  --text: #e8f0f8;
+  --text-dim: rgba(214, 230, 245, 0.62);
+  --text-faint: rgba(200, 220, 240, 0.38);
+
+  --accent: #8fd0ff;
+  --accent-soft: rgba(143, 208, 255, 0.16);
+  --accent-line: rgba(143, 208, 255, 0.34);
+  --warn: #ffc48a;
+  --danger: #ff9a9a;
+
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 20px;
+
+  --shadow-soft: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The overlay window is genuinely transparent: nothing here may paint a
+   background, or the desktop stops showing through. */
+body.overlay-body,
+body.overlay-body #root {
+  background: transparent;
+  overflow: hidden;
+  /* The window is mostly empty space; only the character and panel opt in. */
+  user-select: none;
+  cursor: default;
+}
+
+body.settings-body {
+  background:
+    radial-gradient(120% 80% at 20% 0%, #16202e 0%, #0c111a 55%, #080b11 100%);
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(150, 190, 230, 0.18);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 190, 230, 0.32);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
