@@ -12,6 +12,8 @@ import * as ipc from "@/ipc/bridge";
 export interface AmbientRequest {
   system: string;
   prompt: string;
+  /** Turns placed before the prompt, e.g. voice examples for a local model. */
+  prelude?: { role: string; content: string }[];
   timeoutMs?: number;
 }
 
@@ -25,7 +27,9 @@ const newId = () =>
 export async function requestAmbientLine({
   system,
   prompt,
-  timeoutMs = 25_000,
+  prelude = [],
+  // A local model's first request after idle includes loading its weights.
+  timeoutMs = 60_000,
 }: AmbientRequest): Promise<string | null> {
   const requestId = newId();
   let text = "";
@@ -73,7 +77,7 @@ export async function requestAmbientLine({
     await ipc.sendMessage({
       requestId,
       system,
-      messages: [{ role: "user", content: prompt }],
+      messages: [...prelude, { role: "user", content: prompt }],
     });
 
     const result = await settled;

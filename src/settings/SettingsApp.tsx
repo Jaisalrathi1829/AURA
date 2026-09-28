@@ -10,9 +10,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import * as ipc from "@/ipc/bridge";
 import { RENDERER_LIST } from "@/character/renderers";
-import type { ModelOption, RendererId, Settings } from "@/types";
+import type { EngineStatus, ModelOption, OllamaModel, RendererId, Settings } from "@/types";
+import { chooseVoice, loadVoices, Speaker } from "@/voice/webSpeech";
 
 import { NumberField, Row, Section, Select, Slider, Toggle } from "./controls";
+
+const formatSize = (bytes: number) =>
+  bytes > 0 ? ` · ${(bytes / 1024 ** 3).toFixed(1)} GB` : "";
+
+/** Installed models, keeping the saved choice listed even if Ollama is down. */
+function ollamaOptions(models: OllamaModel[], current: string) {
+  const options = models.map((m) => ({
+    value: m.name,
+    label: `${m.name}${formatSize(m.sizeBytes)}${m.vision ? " · sees images" : ""}`,
+  }));
+  if (current && !models.some((m) => m.name === current)) {
+    options.unshift({ value: current, label: `${current} (not found)` });
+  }
+  return options;
+}
 
 type Tab = "general" | "ai" | "behavior" | "privacy" | "appearance" | "voice";
 
@@ -37,6 +53,34 @@ export function SettingsApp() {
   const [keyStatus, setKeyStatus] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [rendererStatus, setRendererStatus] = useState<Record<string, string>>({});
+
+  const [ollamaModels, setOllamaModels] = useState<OllamaModel[]>([]);
+  const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
+  const [engineTest, setEngineTest] = useState<string | null>(null);
+  const [testingEngine, setTestingEngine] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [autoVoice, setAutoVoice] = useState<string | null>(null);
+
+  // Engine status depends on the engine settings, so re-ask whenever they
+  // change (after the debounced save has landed).
+  const engineKey = settings
+    ? `${settings.engine}|${settings.ollamaModel}|${settings.ollamaVisionModel}|${settings.ollamaUrl}|${settings.model}|${keyPresent}`
+    : "";
+  useEffect(() => {
+    if (!engineKey) return;
+    const timer = window.setTimeout(() => {
+      void ipc.engineStatus().then(setEngineStatus).catch(() => setEngineStatus(null));
+      void ipc.listOllamaModels().then(setOllamaModels).catch(() => setOllamaModels([]));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [engineKey]);
+
+  useEffect(() => {
+    void loadVoices().then((list) => {
+      setVoices(list);
+      setAutoVoice(chooseVoice(list, "")?.name ?? null);
+    });
+  }, []);
 
   // Debounce writes so dragging a slider doesn't hit disk on every frame.
   const pending = useRef<number | null>(null);
@@ -171,6 +215,97 @@ export function SettingsApp() {
 
         {tab === "ai" && (
           <>
+            <Section title="Engine">
+              <Row label="Thinks with">
+                <Select
+                  value={settings.engine}
+                  options={[
+                    { value: "ollama", label: "Local model (Ollama)" },
+                    { value: "claude", label: "Claude API" },
+                  ]}
+                  onChange={(engine) => {
+                    setEngineTest(null);
+                    update({ engine });
+                  }}
+                />
+              </Row>
+              {engineStatus && (
+                <p className="settings-note settings-note--tight">
+                  <em>{engineStatus.ready ? "Ready." : "Not ready."}</em> {engineStatus.detail}
+                </p>
+              )}
+              <div className="key-actions engine-test">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={testingEngine}
+                  onClick={async () => {
+                    setTestingEngine(true);
+                    setEngineTest(
+                      settings.engine === "ollama"
+                        ? "Loading the model — the first time can take a little while…"
+                        : "Testing…",
+                    );
+                    try {
+                      setEngineTest(await ipc.testEngine());
+                    } catch (e) {
+                      setEngineTest(String(e));
+                    } finally {
+                      setTestingEngine(false);
+                    }
+                  }}
+                >
+                  Test engine
+                </button>
+                {engineTest && <span className="key-status">{engineTest}</span>}
+              </div>
+            </Section>
+
+            {settings.engine === "ollama" && (
+              <Section title="Local model">
+                <p className="settings-note">
+                  Runs on this machine through Ollama. Free, works offline, and
+                  nothing you say — or anything on your screen — leaves the
+                  computer.
+                </p>
+                <Row label="Model">
+                  <Select
+                    value={settings.ollamaModel}
+                    options={ollamaOptions(ollamaModels, settings.ollamaModel)}
+                    onChange={(ollamaModel) => update({ ollamaModel })}
+                  />
+                </Row>
+                <Row
+                  label="Seeing the screen"
+                  hint={
+                    ollamaModels.some((m) => m.vision)
+                      ? "A vision model receives the actual screenshot. Without one, the screen's text is read on-device and given to her model."
+                      : "None of your installed models can see images, so the screen's text is read on-device and given to her model. Install a vision model in Ollama (e.g. qwen2.5vl:3b) to let her see layout and images too."
+                  }
+                >
+                  <Select
+                    value={settings.ollamaVisionModel}
+                    options={[
+                      { value: "", label: "Read text on screen (OCR)" },
+                      ...ollamaModels
+                        .filter((m) => m.vision)
+                        .map((m) => ({ value: m.name, label: `See it — ${m.name}` })),
+                    ]}
+                    onChange={(ollamaVisionModel) => update({ ollamaVisionModel })}
+                  />
+                </Row>
+                <Row label="Ollama address" hint="Only this computer is allowed.">
+                  <input
+                    className="text-field"
+                    value={settings.ollamaUrl}
+                    spellCheck={false}
+                    onChange={(event) => update({ ollamaUrl: event.target.value })}
+                  />
+                </Row>
+              </Section>
+            )}
+
+            {settings.engine === "claude" && (
             <Section title="Claude API key">
               <p className="settings-note">
                 Stored in the Windows Credential Manager, never in a settings file
@@ -234,16 +369,19 @@ export function SettingsApp() {
                 {keyStatus && <span className="key-status">{keyStatus}</span>}
               </div>
             </Section>
+            )}
 
-            <Section title="Model">
-              <Row label="Model">
+            <Section title="Replies">
+              {settings.engine === "claude" && (
+              <Row label="Claude model">
                 <Select
                   value={settings.model}
                   options={models.map((m) => ({ value: m.id, label: m.label }))}
                   onChange={(model) => update({ model })}
                 />
               </Row>
-              {activeModel && (
+              )}
+              {settings.engine === "claude" && activeModel && (
                 <p className="settings-note">
                   {activeModel.note} ${activeModel.inputPrice.toFixed(2)} per million
                   input tokens, ${activeModel.outputPrice.toFixed(2)} per million
@@ -264,6 +402,7 @@ export function SettingsApp() {
                   onChange={(responseLength) => update({ responseLength })}
                 />
               </Row>
+              {settings.engine === "claude" && (
               <Row
                 label="Effort"
                 hint={
@@ -282,6 +421,7 @@ export function SettingsApp() {
                   onChange={(effort) => update({ effort })}
                 />
               </Row>
+              )}
             </Section>
 
             <Section title="Personality">
@@ -357,10 +497,10 @@ export function SettingsApp() {
               <p className="settings-note">
                 AURA sees which application is in front, how long you have been
                 in it, and whether you are focused or bouncing between windows.
-                <strong> Claude</strong> writes each line from that situation —
-                on Haiku it costs a fraction of a cent per reaction, and it falls
-                back to <strong>Local</strong> whenever the API is unavailable.
-                Local uses her own writing: free, offline, and less specific.
+                <strong> Written by her model</strong> means her engine (see the
+                AI tab) writes each line from that situation, falling back to
+                canned lines if it's unavailable. <strong>Canned</strong> uses
+                her pre-written lines: instant, and less specific.
               </p>
               <Row
                 label="Reactions"
@@ -373,16 +513,16 @@ export function SettingsApp() {
                 <Select
                   value={settings.appReactionMode}
                   options={[
-                    { value: "claude", label: "Claude — contextual" },
-                    { value: "local", label: "Local — free" },
+                    { value: "claude", label: "Written by her model" },
+                    { value: "local", label: "Canned lines" },
                     { value: "off", label: "Off" },
                   ]}
                   onChange={(appReactionMode) => update({ appReactionMode })}
                 />
               </Row>
-              {settings.appReactionMode === "claude" && !keyPresent && (
+              {settings.appReactionMode === "claude" && engineStatus && !engineStatus.ready && (
                 <p className="settings-note settings-note--tight">
-                  No API key saved, so she will fall back to local lines.
+                  Her engine isn't available right now, so she will fall back to canned lines.
                 </p>
               )}
             </Section>
@@ -537,20 +677,56 @@ export function SettingsApp() {
         {tab === "voice" && (
           <Section title="Voice">
             <p className="settings-note">
-              Voice is not implemented in this version. The provider interfaces
-              exist so speech can be added without touching the character or
-              conversation systems, but nothing here does anything yet — the
-              controls are disabled rather than pretending to work.
+              She speaks her replies and remarks aloud with a voice built into
+              Windows — local and free. Speech starts as soon as the first
+              sentence arrives. Talking to her by voice isn't supported yet.
             </p>
-            <Row label="Enable voice">
-              <Toggle checked={false} disabled onChange={() => undefined} />
-            </Row>
-            <Row label="Speech provider">
-              <Select
-                value="none"
-                options={[{ value: "none", label: "None available" }]}
-                onChange={() => undefined}
+            <Row label="Speak aloud">
+              <Toggle
+                checked={settings.voiceEnabled}
+                onChange={(voiceEnabled) => update({ voiceEnabled })}
               />
+            </Row>
+            <Row
+              label="Voice"
+              hint={
+                voices.length === 0
+                  ? "No Windows voices found. Add one in Windows Settings → Time & language → Speech."
+                  : "More voices can be added in Windows Settings → Time & language → Speech."
+              }
+            >
+              <Select
+                value={settings.voiceName}
+                options={[
+                  { value: "", label: `Automatic${autoVoice ? ` (${autoVoice})` : ""}` },
+                  ...voices.map((v) => ({ value: v.name, label: `${v.name} — ${v.lang}` })),
+                ]}
+                onChange={(voiceName) => update({ voiceName })}
+              />
+            </Row>
+            <Row label="Speed">
+              <Slider
+                value={settings.voiceRate}
+                min={0.6}
+                max={1.6}
+                step={0.05}
+                format={(v) => `${v.toFixed(2)}×`}
+                onChange={(voiceRate) => update({ voiceRate })}
+              />
+            </Row>
+            <Row label="Try it">
+              <button
+                type="button"
+                className="btn"
+                disabled={voices.length === 0}
+                onClick={async () => {
+                  const preview = new Speaker({ onSpeakingChange: () => undefined });
+                  await preview.configure(true, settings.voiceName, settings.voiceRate);
+                  preview.say("Hello. This is how I sound. Try not to be too disappointed.");
+                }}
+              >
+                Play sample
+              </button>
             </Row>
           </Section>
         )}

@@ -15,7 +15,10 @@ export interface ChatPanelProps {
   open: boolean;
   entries: ChatEntry[];
   status: ConversationStatus;
-  hasApiKey: boolean;
+  /** Whether the selected engine (local model or Claude) can answer. */
+  engineReady: boolean;
+  /** Why it can't, when it can't. */
+  engineDetail: string | null;
   screenEnabled: boolean;
   capturing: boolean;
   onSend: (text: string, options?: { withScreenshot?: boolean }) => void;
@@ -29,7 +32,8 @@ export function ChatPanel({
   open,
   entries,
   status,
-  hasApiKey,
+  engineReady,
+  engineDetail,
   screenEnabled,
   capturing,
   onSend,
@@ -114,9 +118,9 @@ export function ChatPanel({
           <div className="chat-panel__empty">
             <p>Nothing said yet.</p>
             <p className="dim">
-              {hasApiKey
+              {engineReady
                 ? "Ask me something."
-                : "Add a Claude API key in Settings and I'll have something to say."}
+                : (engineDetail ?? "My model isn't available.") + " Check Settings → AI."}
             </p>
           </div>
         )}
@@ -152,7 +156,7 @@ export function ChatPanel({
           ref={inputRef}
           value={draft}
           rows={1}
-          placeholder={hasApiKey ? "Say something…" : "No API key yet"}
+          placeholder={engineReady ? "Say something…" : "My model isn't available"}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             // Enter sends; Shift+Enter is a newline.

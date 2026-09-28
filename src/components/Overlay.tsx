@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import * as ipc from "@/ipc/bridge";
 import { requestAmbientLine } from "@/ai/ambient";
-import { buildSystemPrompt } from "@/ai/personality";
+import { buildSystemPrompt, withStyleExamples } from "@/ai/personality";
 import { CharacterAnimation } from "@/character/CharacterAnimation";
 import { CharacterStateMachine } from "@/character/CharacterStateMachine";
 import { ChatPanel } from "@/chat/ChatPanel";
@@ -23,7 +23,8 @@ import {
   decideReaction,
   describeActivity,
 } from "@/scheduler/reactions";
-import type { OverlayLayout, Settings } from "@/types";
+import type { EngineStatus, OverlayLayout, Settings } from "@/types";
+import { Speaker } from "@/voice/webSpeech";
 
 import { CharacterStage } from "./CharacterStage";
 import { SpeechBubble } from "./SpeechBubble";
@@ -42,7 +43,7 @@ export function Overlay() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [layout, setLayout] = useState<OverlayLayout | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [hasKey, setHasKey] = useState(false);
+  const [engine, setEngine] = useState<EngineStatus | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [bubble, setBubble] = useState<{ text: string; token: number } | null>(null);
   const [capturing, setCapturing] = useState(false);
@@ -50,6 +51,25 @@ export function Overlay() {
   const machine = useMemo(() => new CharacterStateMachine(), []);
   const animation = useMemo(() => new CharacterAnimation(machine), [machine]);
   const activity = useMemo(() => new ActivityTracker(), []);
+  // Her voice drives the mouth: while a sentence is being spoken she is
+  // TALKING, and she settles back only once the last one finishes — which is
+  // usually well after the model has stopped streaming.
+  const speaker = useMemo(
+    () =>
+      new Speaker({
+        onSpeakingChange: (speaking) => {
+          void ipc.trace(speaking ? "voice: speaking" : "voice: finished");
+          animation.setSpeaking(speaking);
+          if (speaking) {
+            machine.set("TALKING");
+          } else if (!conversationRef.current?.busy) {
+            machine.set("IDLE", { force: true });
+          }
+        },
+        onError: (reason) => void ipc.trace(`voice error: ${reason}`),
+      }),
+    [animation, machine],
+  );
 
   const interactiveRef = useRef<HTMLDivElement | null>(null);
   const characterRef = useRef<HTMLDivElement | null>(null);
@@ -81,11 +101,14 @@ export function Overlay() {
       } else if (status === "speaking") {
         machine.set("TALKING");
         animation.setSpeaking(true);
-      } else {
+      } else if (!speaker.speaking) {
         animation.setSpeaking(false);
         machine.set("IDLE", { force: true });
       }
+      // Otherwise the voice is still going; the speaker settles her when done.
     },
+    onReplyText: (text) => speaker.feed(text),
+    onReplyEnd: () => speaker.end(),
   });
 
   const conversationRef = useRef(conversation);
@@ -109,13 +132,8 @@ export function Overlay() {
       // and look like a crash, so the failure is surfaced on screen instead.
       let loaded: Settings;
       let measured: OverlayLayout;
-      let keyPresent: boolean;
       try {
-        [loaded, measured, keyPresent] = await Promise.all([
-          ipc.getSettings(),
-          ipc.overlayLayout(),
-          ipc.hasApiKey(),
-        ]);
+        [loaded, measured] = await Promise.all([ipc.getSettings(), ipc.overlayLayout()]);
       } catch (e) {
         if (!cancelled) setBootError(String(e));
         await ipc.overlayReady().catch(() => undefined);
@@ -124,9 +142,25 @@ export function Overlay() {
       if (cancelled) return;
       setSettings(loaded);
       setLayout(measured);
-      setHasKey(keyPresent);
       animation.setIntensity(loaded.animationIntensity);
       animation.start();
+      void speaker
+        .configure(loaded.voiceEnabled, loaded.voiceName, loaded.voiceRate)
+        .then(() =>
+          ipc.trace(
+            `voice: ${loaded.voiceEnabled ? "on" : "off"}, ${speaker.available ? speaker.voiceLabel : "speech unavailable"}`,
+          ),
+        );
+      // Asking Ollama what's installed can take a moment; never hold up her
+      // appearing for it.
+      void ipc
+        .engineStatus()
+        .then((status) => {
+          if (cancelled) return;
+          setEngine(status);
+          void ipc.trace(`engine: ${status.detail}`);
+        })
+        .catch(() => undefined);
 
       await ipc.overlayReady();
       // Nothing is under the pointer yet, so start in pass-through.
@@ -143,22 +177,27 @@ export function Overlay() {
     return () => {
       cancelled = true;
       animation.stop();
+      speaker.stop();
     };
-  }, [animation]);
+  }, [animation, speaker]);
 
   // ---- react to settings changes from the settings window ---------------
   useEffect(() => {
     const pending = ipc.onSettingsChanged(async (next) => {
       setSettings(next);
       animation.setIntensity(next.animationIntensity);
+      void speaker.configure(next.voiceEnabled, next.voiceName, next.voiceRate);
       setLayout(await ipc.overlayLayout());
       schedulerRef.current?.update(next);
+      setEngine(await ipc.engineStatus().catch(() => null));
     });
     return () => void pending.then((off) => off());
-  }, [animation]);
+  }, [animation, speaker]);
 
   useEffect(() => {
-    const pending = ipc.onApiKeyChanged(setHasKey);
+    const pending = ipc.onApiKeyChanged(async () => {
+      setEngine(await ipc.engineStatus().catch(() => null));
+    });
     return () => void pending.then((off) => off());
   }, []);
 
@@ -183,11 +222,16 @@ export function Overlay() {
       }
       setBubble({ text: line.text, token: Date.now() });
       machine.set(line.kind === "quote" ? "CURIOUS" : "TALKING");
-      animation.setSpeaking(true);
-      window.setTimeout(() => animation.setSpeaking(false), 1200);
-      conversationRef.current.pushAssistantLine(line.text);
+      if (current?.voiceEnabled && speaker.available) {
+        // The voice animates the mouth for exactly as long as she speaks.
+        speaker.say(line.text);
+      } else {
+        animation.setSpeaking(true);
+        window.setTimeout(() => animation.setSpeaking(false), 1200);
+      }
+      conversationRef.current?.pushAssistantLine(line.text);
     },
-    [settings, machine, animation],
+    [settings, machine, animation, speaker],
   );
 
   const speakRef = useRef(speakLine);
@@ -212,8 +256,8 @@ export function Overlay() {
       reactionTimer.current = window.setTimeout(async () => {
         reactionTimer.current = null;
 
-        // Don't talk over the user, and honour quiet hours.
-        if (chatOpenRef.current || conversationRef.current.busy) {
+        // Don't talk over the user, or over herself, and honour quiet hours.
+        if (chatOpenRef.current || conversationRef.current?.busy || speaker.speaking) {
           void ipc.trace(`reaction skipped: busy (${app.exe})`);
           return;
         }
@@ -223,7 +267,12 @@ export function Overlay() {
         }
 
         const now = Date.now();
-        const cooldown = REACTION_COOLDOWN_MS[mode];
+        // A local engine costs nothing per line, so it only needs the
+        // don't-be-annoying cooldown, not the don't-spend-credit one.
+        const cooldown =
+          mode === "claude" && current.engine === "claude"
+            ? REACTION_COOLDOWN_MS.claude
+            : REACTION_COOLDOWN_MS.local;
         if (now - lastReactionAt.current < cooldown) {
           const left = Math.round((cooldown - (now - lastReactionAt.current)) / 1000);
           void ipc.trace(`reaction skipped: cooldown ${left}s (${app.exe})`);
@@ -251,18 +300,19 @@ export function Overlay() {
             system: buildSystemPrompt({
               settings: current,
               activity: describeActivity(settled),
-              withScreenshot: false,
+              screen: null,
             }),
             prompt: buildReactionPrompt(settled, decision.reason),
+            prelude: withStyleExamples(current, []),
           });
           // A failed or declined ambient request falls back to the local line
           // rather than going silent — the feature must not depend on the API.
           if (written === null && decision.reason === "opened") {
-            void ipc.trace("reaction: claude declined and reason was weak — quiet");
+            void ipc.trace("reaction: model declined and reason was weak — quiet");
             return;
           }
           if (written) line = written;
-          else void ipc.trace("reaction: claude unavailable, using local line");
+          else void ipc.trace("reaction: model unavailable, using local line");
         }
 
         lastReactionAt.current = Date.now();
@@ -275,7 +325,7 @@ export function Overlay() {
       void pending.then((off) => off());
       if (reactionTimer.current !== null) window.clearTimeout(reactionTimer.current);
     };
-  }, [activity]);
+  }, [activity, speaker]);
 
   useEffect(() => {
     if (!settings) return;
@@ -285,7 +335,7 @@ export function Overlay() {
     }
     const scheduler = new ProactiveScheduler(settings, {
       speak: (line) => speakRef.current(line),
-      isBusy: () => chatOpenRef.current || conversationRef.current.busy,
+      isBusy: () => chatOpenRef.current || conversationRef.current?.busy,
     });
     schedulerRef.current = scheduler;
     scheduler.start();
@@ -308,7 +358,7 @@ export function Overlay() {
   // ---- drift into sleep --------------------------------------------------
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (conversationRef.current.busy || chatOpenRef.current) return;
+      if (conversationRef.current?.busy || chatOpenRef.current) return;
       if (Date.now() - lastInteraction.current < SLEEP_AFTER_MS) return;
       if (machine.getState() === "SLEEPING") return;
       machine.set("SLEEPING", { force: true });
@@ -453,16 +503,24 @@ export function Overlay() {
           open={chatOpen}
           entries={conversation.entries}
           status={conversation.status}
-          hasApiKey={hasKey}
+          // Unknown yet (Ollama still being asked) counts as ready, so the
+          // input isn't greyed out for the second it takes to find out.
+          engineReady={engine?.ready ?? true}
+          engineDetail={engine?.detail ?? null}
           screenEnabled={settings.screenCaptureEnabled}
           capturing={capturing}
           onSend={(text, options) => {
             noteInteraction();
+            speaker.stop();
             void conversation.send(text, options);
           }}
-          onCancel={conversation.cancel}
+          onCancel={() => {
+            speaker.stop();
+            conversation.cancel();
+          }}
           onClear={conversation.clear}
           onMinimize={() => {
+            speaker.stop();
             setChatOpen(false);
             machine.set("IDLE", { force: true });
             void ipc.setPointerOver(false).catch(() => undefined);

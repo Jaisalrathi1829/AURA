@@ -18,6 +18,12 @@ export interface Settings {
   clickThroughEmpty: boolean;
 
   // AI
+  engine: EngineId;
+  ollamaUrl: string;
+  ollamaModel: string;
+  /** Empty: read the screen with on-device OCR instead of sending an image. */
+  ollamaVisionModel: string;
+  /** Claude model, when the Claude engine is selected. */
   model: string;
   responseLength: ResponseLength;
   effort: Effort;
@@ -52,6 +58,35 @@ export interface Settings {
   voiceEnabled: boolean;
   ttsProvider: string;
   sttProvider: string;
+  /** Windows voice name; empty picks a female English voice automatically. */
+  voiceName: string;
+  voiceRate: number;
+}
+
+/** Where AURA's thinking happens. */
+export type EngineId = "ollama" | "claude";
+
+export interface EngineStatus {
+  engine: EngineId;
+  model: string;
+  ready: boolean;
+  /** True if the screen can be sent as an image rather than read as text. */
+  vision: boolean;
+  visionModel: string | null;
+  detail: string;
+}
+
+export interface OllamaModel {
+  name: string;
+  sizeBytes: number;
+  vision: boolean;
+  thinking: boolean;
+}
+
+export interface ScreenCapture {
+  pngBase64: string;
+  /** Text read on-device; null if OCR is unavailable. */
+  text: string | null;
 }
 
 export interface ModelOption {

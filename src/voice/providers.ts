@@ -1,13 +1,10 @@
 /**
  * Voice provider interfaces.
  *
- * Voice is **not implemented** in this version. These interfaces exist so that
- * adding speech later is a matter of writing a provider and registering it,
+ * Speech output ships with a provider built on the Windows voices
+ * (`webSpeech.ts`). Speech input does not yet; these interfaces let one be added
  * without touching the character system or the conversation flow — the same
  * arrangement the character renderers use.
- *
- * The Settings window shows voice controls as explicitly disabled rather than
- * as buttons that silently do nothing.
  */
 
 export interface SpeechToTextResult {
@@ -43,6 +40,5 @@ export interface TextToSpeechProvider {
   cancel(): void;
 }
 
-/** Registries, deliberately empty until a provider ships. */
+/** Speech input has no provider yet; the built-in Windows voices handle output. */
 export const STT_PROVIDERS: SpeechToTextProvider[] = [];
-export const TTS_PROVIDERS: TextToSpeechProvider[] = [];

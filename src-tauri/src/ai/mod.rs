@@ -5,6 +5,7 @@
 //! Tauri events.
 
 pub mod claude;
+pub mod ollama;
 
 pub use claude::{stream_chat, ChatMessage, ChatRequest};
 

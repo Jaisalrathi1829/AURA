@@ -9,7 +9,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import * as ipc from "@/ipc/bridge";
-import { buildSystemPrompt, trimHistory } from "@/ai/personality";
+import {
+  buildSystemPrompt,
+  trimHistory,
+  withStyleExamples,
+  type ScreenMode,
+} from "@/ai/personality";
 import type { AiErrorKind, ChatEntry, Settings } from "@/types";
 
 const STORAGE_KEY = "aura.conversation.v1";
@@ -23,13 +28,16 @@ const ERROR_TEXT: Record<AiErrorKind, string> = {
   auth: "That key isn't being accepted. Worth checking it in Settings.",
   "rate-limit": "Rate limited. Give it a minute and ask me again.",
   overloaded: "The API is struggling right now. Try again shortly.",
-  network: "I can't reach the network. I'm still here, just not clever at the moment.",
+  network: "I can't reach my model. I'm still here, just not clever at the moment.",
   timeout: "That took too long and I gave up. Ask again?",
   refusal: "I'd rather not answer that one.",
   "bad-request": "Something about that request was malformed. Check the model in Settings.",
   malformed: "I got a reply I couldn't read. Try once more.",
   cancelled: "Stopped.",
 };
+
+/** Failures where the engine's message says what to fix better than we can. */
+const PREFER_ENGINE_MESSAGE = new Set<AiErrorKind>(["network", "bad-request", "malformed"]);
 
 const newId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -54,12 +62,18 @@ export interface UseConversationOptions {
   describeActivity: () => string | null;
   /** Notified when AURA starts/stops producing text, to drive the character. */
   onPhase?: (status: ConversationStatus) => void;
+  /** Each chunk of reply text as it streams — the voice follows along. */
+  onReplyText?: (text: string) => void;
+  /** The reply finished (or failed); flush anything the voice is holding. */
+  onReplyEnd?: () => void;
 }
 
 export function useConversation({
   settings,
   describeActivity,
   onPhase,
+  onReplyText,
+  onReplyEnd,
 }: UseConversationOptions) {
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [status, setStatus] = useState<ConversationStatus>("idle");
@@ -76,6 +90,10 @@ export function useConversation({
   settingsRef.current = settings;
   activityRef.current = describeActivity;
   phaseRef.current = onPhase;
+  const replyTextRef = useRef(onReplyText);
+  const replyEndRef = useRef(onReplyEnd);
+  replyTextRef.current = onReplyText;
+  replyEndRef.current = onReplyEnd;
 
   const applyStatus = useCallback((next: ConversationStatus) => {
     setStatus(next);
@@ -121,6 +139,7 @@ export function useConversation({
         if (id !== activeRequest.current) return;
         const replyId = activeReply.current;
         if (!replyId) return;
+        replyTextRef.current?.(text);
         setEntries((prev) =>
           prev.map((entry) =>
             entry.id === replyId
@@ -140,6 +159,7 @@ export function useConversation({
             entry.id === replyId ? { ...entry, streaming: false } : entry,
           ),
         );
+        replyEndRef.current?.();
         activeRequest.current = null;
         activeReply.current = null;
         applyStatus("idle");
@@ -155,14 +175,20 @@ export function useConversation({
             entry.id === replyId
               ? {
                   ...entry,
-                  // Keep any partial text; append the explanation only if empty.
-                  content: entry.content || ERROR_TEXT[kind] || message,
+                  // Keep any partial text. Otherwise prefer the engine's own
+                  // explanation (e.g. "Ollama isn't answering") over the
+                  // generic line when it has one.
+                  content:
+                    entry.content ||
+                    (PREFER_ENGINE_MESSAGE.has(kind) && message ? message : ERROR_TEXT[kind]) ||
+                    message,
                   streaming: false,
                   error: kind,
                 }
               : entry,
           ),
         );
+        replyEndRef.current?.();
         activeRequest.current = null;
         activeReply.current = null;
         applyStatus("idle");
@@ -212,34 +238,55 @@ export function useConversation({
         return [...prev, userEntry, replyEntry];
       });
 
+      const failReply = (content: string) => {
+        setEntries((prev) =>
+          prev.map((entry) =>
+            entry.id === replyId
+              ? { ...entry, content, streaming: false, error: "bad-request" }
+              : entry,
+          ),
+        );
+        activeRequest.current = null;
+        activeReply.current = null;
+        applyStatus("idle");
+      };
+
+      // A model that can see gets the image. One that can't gets the screen's
+      // text, read on this machine, folded into the message.
       let imagePngBase64: string | null = null;
+      let screen: ScreenMode = null;
+      let userContent = trimmedText;
       if (withScreenshot) {
         try {
-          imagePngBase64 = await ipc.captureScreen();
+          const [engine, shot] = await Promise.all([
+            ipc.engineStatus().catch(() => null),
+            ipc.captureScreen(),
+          ]);
+          if (engine?.vision) {
+            imagePngBase64 = shot.pngBase64;
+            screen = "image";
+          } else if (shot.text) {
+            screen = "text";
+            userContent = `${trimmedText}\n\n<screen_text>\n${shot.text}</screen_text>`;
+          } else {
+            failReply(
+              "I looked, but I couldn't make out any text on your screen, and my current model can't see images.",
+            );
+            return;
+          }
         } catch (e) {
-          setEntries((prev) =>
-            prev.map((entry) =>
-              entry.id === replyId
-                ? {
-                    ...entry,
-                    content: `I couldn't capture the screen. ${String(e)}`,
-                    streaming: false,
-                    error: "bad-request",
-                  }
-                : entry,
-            ),
-          );
-          activeRequest.current = null;
-          activeReply.current = null;
-          applyStatus("idle");
+          failReply(`I couldn't capture the screen. ${String(e)}`);
           return;
         }
       }
 
-      const payload = trimHistory(
-        history.filter((entry) => !entry.error || entry.content),
-      ).map((entry) => ({ role: entry.role, content: entry.content }));
-      payload.push({ role: "user", content: trimmedText });
+      // Error explanations are AURA talking about herself, not conversation —
+      // feeding them back would teach the model it said them.
+      const turns = trimHistory(history.filter((entry) => !entry.error && entry.content)).map(
+        (entry) => ({ role: entry.role, content: entry.content }),
+      );
+      turns.push({ role: "user", content: userContent });
+      const payload = withStyleExamples(current, turns);
 
       try {
         await ipc.sendMessage({
@@ -247,27 +294,13 @@ export function useConversation({
           system: buildSystemPrompt({
             settings: current,
             activity: activityRef.current(),
-            withScreenshot,
+            screen,
           }),
           messages: payload,
           imagePngBase64,
         });
       } catch (e) {
-        setEntries((prev) =>
-          prev.map((entry) =>
-            entry.id === replyId
-              ? {
-                  ...entry,
-                  content: `Something went wrong sending that. ${String(e)}`,
-                  streaming: false,
-                  error: "bad-request",
-                }
-              : entry,
-          ),
-        );
-        activeRequest.current = null;
-        activeReply.current = null;
-        applyStatus("idle");
+        failReply(`Something went wrong sending that. ${String(e)}`);
       }
     },
     [applyStatus],

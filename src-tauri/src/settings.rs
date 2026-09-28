@@ -32,6 +32,17 @@ impl ResponseLength {
         }
     }
 
+    /// Output cap for a local model. Unlike Claude these don't think first,
+    /// and a small model given room will ramble into it — measured on
+    /// dolphin-mistral, normal replies land well inside 200 tokens.
+    pub fn local_max_tokens(self) -> u32 {
+        match self {
+            ResponseLength::Brief => 100,
+            ResponseLength::Normal => 200,
+            ResponseLength::Detailed => 700,
+        }
+    }
+
     pub fn guidance(self) -> &'static str {
         match self {
             ResponseLength::Brief => "Answer in one or two sentences unless more is genuinely needed.",
@@ -57,6 +68,16 @@ pub struct Settings {
     pub click_through_empty: bool,
 
     // ---- AI ----
+    /// `ollama` (local model on this machine) or `claude` (Anthropic API).
+    pub engine: String,
+    /// Loopback-only Ollama server address.
+    pub ollama_url: String,
+    /// The local model AURA thinks with.
+    pub ollama_model: String,
+    /// Optional vision-capable local model for "look at my screen". Empty means
+    /// the screen is read with on-device OCR and described to `ollama_model`.
+    pub ollama_vision_model: String,
+    /// Claude model, used when `engine` is `claude`.
     pub model: String,
     pub response_length: ResponseLength,
     /// `low` | `medium` | `high` — ignored for models that don't support it.
@@ -78,8 +99,9 @@ pub struct Settings {
     /// Deliver proactive lines as Windows toasts instead of speech bubbles.
     pub proactive_as_notification: bool,
 
-    /// `off` | `local` | `claude` — how AURA reacts to app switches.
-    /// `local` is free; `claude` writes each line and therefore costs credit.
+    /// `off` | `local` | `claude` — how AURA reacts to app switches. `local`
+    /// picks a canned line; `claude` has the active engine write one (the value
+    /// predates the Ollama engine and is kept so saved settings stay valid).
     pub app_reaction_mode: String,
 
     // ---- Privacy ----
@@ -94,10 +116,14 @@ pub struct Settings {
     pub animation_intensity: f64,
     pub greeting_on_start: bool,
 
-    // ---- Voice (interfaces exist; no provider ships in v1) ----
+    // ---- Voice ----
+    /// Speak replies and remarks aloud with a Windows voice.
     pub voice_enabled: bool,
     pub tts_provider: String,
     pub stt_provider: String,
+    /// Preferred Windows voice name; empty picks a female English voice.
+    pub voice_name: String,
+    pub voice_rate: f64,
 }
 
 impl Default for Settings {
@@ -112,9 +138,14 @@ impl Default for Settings {
             size: None,
             click_through_empty: true,
 
-            // Haiku by default: AURA's replies are short and frequent, and a
-            // companion that costs real money to say "morning" is one you turn
-            // off. Sonnet 5 and Opus 5 are one dropdown away in Settings.
+            // A local model by default: free to run, works offline, and the
+            // screen never leaves the machine. Claude is one dropdown away.
+            engine: "ollama".into(),
+            ollama_url: crate::ai::ollama::DEFAULT_URL.into(),
+            ollama_model: crate::ai::ollama::DEFAULT_MODEL.into(),
+            ollama_vision_model: String::new(),
+            // Haiku when the Claude engine is chosen: replies are short and
+            // frequent, so the cheap model fits.
             model: "claude-haiku-4-5".into(),
             response_length: ResponseLength::Normal,
             effort: "low".into(),
@@ -145,9 +176,11 @@ impl Default for Settings {
             animation_intensity: 1.0,
             greeting_on_start: true,
 
-            voice_enabled: false,
-            tts_provider: "none".into(),
+            voice_enabled: true,
+            tts_provider: "windows".into(),
             stt_provider: "none".into(),
+            voice_name: String::new(),
+            voice_rate: 1.0,
         }
     }
 }
@@ -166,6 +199,22 @@ impl Settings {
         if !crate::ai::is_supported_model(&self.model) {
             self.model = "claude-haiku-4-5".into();
         }
+        if !matches!(self.engine.as_str(), "ollama" | "claude") {
+            self.engine = "ollama".into();
+        }
+        // Refuse anything that isn't this machine: a local engine that could
+        // be pointed elsewhere would silently ship screenshots off-box.
+        self.ollama_url = crate::ai::ollama::validate_base_url(&self.ollama_url)
+            .unwrap_or_else(|| crate::ai::ollama::DEFAULT_URL.into());
+        if self.ollama_model.trim().is_empty() {
+            self.ollama_model = crate::ai::ollama::DEFAULT_MODEL.into();
+        }
+        self.ollama_model = self.ollama_model.trim().to_string();
+        self.ollama_vision_model = self.ollama_vision_model.trim().to_string();
+        if !matches!(self.tts_provider.as_str(), "none" | "windows") {
+            self.tts_provider = "windows".into();
+        }
+        self.voice_rate = self.voice_rate.clamp(0.6, 1.6);
         if !matches!(self.renderer.as_str(), "vector" | "video") {
             self.renderer = "vector".into();
         }

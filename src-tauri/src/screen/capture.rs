@@ -11,8 +11,27 @@
 /// keeps on-screen code comfortably legible at a fraction of the cost.
 const MAX_EDGE: u32 = 1920;
 
+/// One captured frame of the virtual desktop, top-down BGRA.
+pub struct Frame {
+    pub bgra: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Frame {
+    /// PNG for a vision model: downscaled, alpha dropped.
+    pub fn to_png(&self) -> Result<Vec<u8>, String> {
+        encode(&self.bgra, self.width, self.height)
+    }
+}
+
 #[cfg(windows)]
 pub fn capture_png() -> Result<Vec<u8>, String> {
+    capture_frame()?.to_png()
+}
+
+#[cfg(windows)]
+pub fn capture_frame() -> Result<Frame, String> {
     use std::mem::size_of;
 
     use windows::Win32::Graphics::Gdi::{
@@ -42,7 +61,7 @@ pub fn capture_png() -> Result<Vec<u8>, String> {
 
         // Everything below must release `screen_dc`, so failures funnel through
         // a closure rather than returning early.
-        let result = (|| -> Result<Vec<u8>, String> {
+        let result = (|| -> Result<Frame, String> {
             let mem_dc = CreateCompatibleDC(Some(screen_dc));
             if mem_dc.is_invalid() {
                 return Err("Could not create a memory device context.".into());
@@ -104,7 +123,11 @@ pub fn capture_png() -> Result<Vec<u8>, String> {
             let _ = DeleteDC(mem_dc);
 
             let bgra = pixels.map_err(|e| format!("Screen capture failed: {e}"))?;
-            encode(bgra, width as u32, height as u32)
+            Ok(Frame {
+                bgra,
+                width: width as u32,
+                height: height as u32,
+            })
         })();
 
         ReleaseDC(None, screen_dc);
@@ -114,6 +137,11 @@ pub fn capture_png() -> Result<Vec<u8>, String> {
 
 #[cfg(not(windows))]
 pub fn capture_png() -> Result<Vec<u8>, String> {
+    Err("Screen capture is only implemented on Windows.".into())
+}
+
+#[cfg(not(windows))]
+pub fn capture_frame() -> Result<Frame, String> {
     Err("Screen capture is only implemented on Windows.".into())
 }
 
@@ -139,7 +167,7 @@ mod tests {
         let width = 3000u32;
         let height = 1500u32;
         let bgra = vec![0u8; (width as usize) * (height as usize) * 4];
-        let png = encode(bgra, width, height).expect("encode should succeed");
+        let png = encode(&bgra, width, height).expect("encode should succeed");
 
         let decoded = image::load_from_memory(&png).expect("should decode");
         assert_eq!(decoded.width(), MAX_EDGE);
@@ -148,8 +176,7 @@ mod tests {
 }
 
 /// BGRA scanlines -> downscaled RGB -> PNG bytes.
-#[cfg(windows)]
-fn encode(bgra: Vec<u8>, width: u32, height: u32) -> Result<Vec<u8>, String> {
+fn encode(bgra: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     use std::io::Cursor;
 
     use image::imageops::FilterType;

@@ -55,6 +55,9 @@ pub fn run() {
             // ai
             commands::ai_cmd::send_message,
             commands::ai_cmd::cancel_message,
+            commands::ai_cmd::engine_status,
+            commands::ai_cmd::list_ollama_models,
+            commands::ai_cmd::test_engine,
             // screen
             commands::screen_cmd::capture_screen,
             // system

@@ -15,8 +15,11 @@ import type {
   AiDone,
   AiError,
   AiPhase,
+  EngineStatus,
   ModelOption,
+  OllamaModel,
   OverlayLayout,
+  ScreenCapture,
   Settings,
 } from "@/types";
 
@@ -62,10 +65,13 @@ export const sendMessage = (request: SendMessageArgs) =>
   invoke<void>("send_message", { request });
 export const cancelMessage = (requestId: string) =>
   invoke<void>("cancel_message", { requestId });
+export const engineStatus = () => invoke<EngineStatus>("engine_status");
+export const listOllamaModels = () => invoke<OllamaModel[]>("list_ollama_models");
+export const testEngine = () => invoke<string>("test_engine");
 
 // ------------------------------------------------------------------ system
 
-export const captureScreen = () => invoke<string>("capture_screen");
+export const captureScreen = () => invoke<ScreenCapture>("capture_screen");
 export const showNotification = (title: string, body: string) =>
   invoke<void>("show_notification", { title, body });
 export const getActiveApp = () => invoke<ActiveApp | null>("get_active_app");

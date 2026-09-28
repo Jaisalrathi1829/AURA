@@ -65,7 +65,7 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
-    fn retryable(self) -> bool {
+    pub(crate) fn retryable(self) -> bool {
         matches!(
             self,
             ErrorKind::RateLimit | ErrorKind::Overloaded | ErrorKind::Network | ErrorKind::Timeout
@@ -73,36 +73,40 @@ impl ErrorKind {
     }
 }
 
+// The four event payloads below are the contract with the frontend. Every
+// engine (Claude, Ollama) emits exactly these, so the UI never knows which
+// model it is talking to.
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ErrorPayload {
-    id: String,
-    kind: ErrorKind,
-    message: String,
+pub(crate) struct ErrorPayload {
+    pub(crate) id: String,
+    pub(crate) kind: ErrorKind,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeltaPayload {
-    id: String,
-    text: String,
+pub(crate) struct DeltaPayload {
+    pub(crate) id: String,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PhasePayload {
-    id: String,
+pub(crate) struct PhasePayload {
+    pub(crate) id: String,
     /// `thinking` while the model reasons, `speaking` once text begins.
-    phase: &'static str,
+    pub(crate) phase: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DonePayload {
-    id: String,
-    stop_reason: Option<String>,
-    input_tokens: u64,
-    output_tokens: u64,
+pub(crate) struct DonePayload {
+    pub(crate) id: String,
+    pub(crate) stop_reason: Option<String>,
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
 }
 
 struct StreamError {
